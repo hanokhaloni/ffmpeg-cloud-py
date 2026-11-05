@@ -48,6 +48,7 @@ public sealed class HlsMonitor
     public bool PlaylistSeen => TimeToFirstPlaylistSeconds != null;
     public double SecondsSinceAdvance => _sinceAdvance.IsRunning ? _sinceAdvance.Elapsed.TotalSeconds : _sinceStart.Elapsed.TotalSeconds;
     public string PlaylistPath => _playlist;
+    public int PendingCount => Segments.Values.Count(r => r.Status == MediaStatus.Pending);
 
     public HlsMonitor(string stream, string playlist, HlsCfg cfg, FFprobeRunner probe, EventBus bus, bool fmp4, string scratchDir)
     {
@@ -185,7 +186,8 @@ public sealed class HlsMonitor
                 if (!d.Ok) { Fail(rec, "decode: " + d.Error); return; }
             }
             // The last segment before #EXT-X-ENDLIST is legitimately short (cut at shutdown).
-            if (!(isFinal && rec.PlaylistDuration < _cfg.TargetDurationSeconds) && Math.Abs(rec.PlaylistDuration - _cfg.TargetDurationSeconds) > _cfg.DurationToleranceSeconds)
+            var isFirst = rec.Sequence == Segments.Keys.DefaultIfEmpty(rec.Sequence).Min();
+            if (!isFirst && !(isFinal && rec.PlaylistDuration < _cfg.TargetDurationSeconds) && Math.Abs(rec.PlaylistDuration - _cfg.TargetDurationSeconds) > _cfg.DurationToleranceSeconds)
             {
                 rec.DurationAnomaly = true;
                 _bus.Publish(EventLevel.Warn, "HLS", _stream, $"segment #{rec.Sequence} duration {rec.PlaylistDuration:0.000}s outside {_cfg.TargetDurationSeconds}±{_cfg.DurationToleranceSeconds}s");

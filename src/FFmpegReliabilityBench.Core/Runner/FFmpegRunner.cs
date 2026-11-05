@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Text;
+using FFmpegReliabilityBench.Core.Lab;
 
 namespace FFmpegReliabilityBench.Core.Runner;
 
@@ -13,6 +14,9 @@ public sealed class FFmpegJob
     public double StallTimeoutSeconds { get; init; } = 10;
     /// <summary>True for finite jobs (consumers, decoders): exit code 0 is success. False for live producers: any unrequested exit is a crash.</summary>
     public bool ExpectExit { get; init; }
+    public ProcessRole Role { get; init; } = ProcessRole.Consumer;
+    /// <summary>Stream/source/instance this process belongs to (for attribution and per-stream views).</summary>
+    public string Owner { get; init; } = "";
 }
 
 public enum SessionState { Starting, Running, Stalled, Stopping, Exited, Crashed, Killed }
@@ -55,9 +59,12 @@ public sealed class FFmpegSession
 
     public event Action<FFmpegSession, ClassifiedLogLine>? Problem;
     public event Action<FFmpegSession, ClassifiedLogLine>? Line;
+    public event Action<FFmpegSession, ProgressSnapshot>? ProgressUpdated;
     public event Action<FFmpegSession, string>? StateChanged;
 
     internal FFmpegSession(FFmpegJob job, System.Diagnostics.Process p) { Job = job; Process = p; Pid = p.Id; }
+    public ManagedProcess? Managed { get; internal set; }
+    public string HumanCommand => CommandText.Human(Job.Executable, Job.Arguments);
 
     internal void OnProgress(ProgressSnapshot s)
     {
@@ -66,8 +73,9 @@ public sealed class FFmpegSession
         // Only count as forward progress when media time or frames advance.
         if (LastProgress == null || s.Frame > LastProgress.Frame || s.OutTimeSeconds > LastProgress.OutTimeSeconds || s.End)
             _lastProgressMs = now;
-        if (FirstFrameProgress == null && s.Frame > 0) { FirstFrameProgress = s; TimeToFirstFrameSeconds = _clock.Elapsed.TotalSeconds; }
+        if (FirstFrameProgress == null && (s.Frame > 0 || s.OutTimeSeconds > 0)) { FirstFrameProgress = s; TimeToFirstFrameSeconds = _clock.Elapsed.TotalSeconds; }
         LastProgress = s;
+        try { ProgressUpdated?.Invoke(this, s); } catch { }
         if (State is SessionState.Starting or SessionState.Stalled) SetState(SessionState.Running, State == SessionState.Stalled ? "progress resumed" : "first progress");
     }
 
@@ -123,6 +131,7 @@ public sealed class FFmpegRunner : IFFmpegRunner
         var p = new System.Diagnostics.Process { StartInfo = psi, EnableRaisingEvents = true };
         p.Start();
         var s = new FFmpegSession(job, p);
+        s.Managed = ProcessRegistry.Current.Register(p, job.Role, job.Name, job.Owner, CommandText.Human(job.Executable, job.Arguments));
 
         StreamWriter? log = null;
         if (job.LogFile != null)
@@ -174,6 +183,7 @@ public sealed class FFmpegRunner : IFFmpegRunner
             try { await Task.WhenAll(stdout, stderr).WaitAsync(TimeSpan.FromSeconds(5)); } catch { }
             s.MarkExited();
             s.ExitCode = p.ExitCode;
+            if (s.Managed != null) ProcessRegistry.Current.MarkExited(s.Managed, p.ExitCode);
             var st = s.KillRequested ? SessionState.Killed
                 : s.StopRequested ? SessionState.Exited
                 : job.ExpectExit && p.ExitCode == 0 ? SessionState.Exited

@@ -58,5 +58,74 @@
     "profile": "baseline",
     "concurrentStreams": 1,
     "injectKillAtSeconds": 0
+  },
+  "lab": {
+    "preset": "local-4-streams",
+    "durationSeconds": 600,
+    "failFast": false,
+    "runRoot": "streambench-runs",
+    "relay": {
+      "mode": "managed",
+      "executable": ".\\tools\\mediamtx\\mediamtx.exe",
+      "listenAddress": "127.0.0.1",
+      "rtspPort": 8554,
+      "rtpPort": 8000,
+      "rtcpPort": 8001,
+      "apiPort": 9997,
+      "url": "",
+      "readyTimeoutSeconds": 15
+    },
+    "publishers": {
+      "count": 4,
+      "mode": "loop-file",
+      "fixturePreset": "720p25-h264-aac",
+      "fixtureDirectory": "streambench-fixtures",
+      "fixtureDurationSeconds": 60,
+      "pathTemplate": "s{index:00}",
+      "startupTimeoutSeconds": 30,
+      "transport": "tcp"
+    },
+    "consumers": {
+      "instancesPerSource": 1,
+      "profiles": [
+        "dual-copy"
+      ],
+      "execution": "parallel",
+      "staggerMilliseconds": 500,
+      "groupDurationSeconds": 0,
+      "stages": [],
+      "stageDurationSeconds": 0,
+      "injectRtspTimeout": true
+    },
+    "http": {
+      "enabled": true,
+      "listenAddress": "127.0.0.1",
+      "port": 8088
+    },
+    "shutdown": {
+      "gracefulTimeoutSeconds": 15,
+      "preserveOutputs": true
+    },
+    "validation": {
+      "maxDecodeWorkers": 0,
+      "recordingHttpSampleEvery": 3,
+      "livePlayer": true,
+      "firstOutputTimeoutSeconds": 40
+    },
+    "sources": [],
+    "templates": [],
+    "faults": []
+  },
+  "ui": {
+    "mode": "full-screen",
+    "refreshHz": 4,
+    "historySeconds": 300,
+    "theme": "dark",
+    "showCommand": true,
+    "asciiFallback": "auto",
+    "color": true
+  },
+  "executables": {
+    "ffmpeg-current": "ffmpeg"
   }
 }

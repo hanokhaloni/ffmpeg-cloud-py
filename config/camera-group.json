@@ -1,0 +1,14 @@
+{
+  "lab": {
+    "preset": "cameras",
+    "durationSeconds": 3600,
+    "sources": [
+      { "id": "lobby", "kind": "camera", "url": "rtsp://192.168.1.10:554/axis-media/media.amp" },
+      { "id": "gate",  "kind": "camera", "url": "rtsp://192.168.1.11:554/profile2/media.smp" },
+      { "id": "s01",   "kind": "synthetic" }
+    ],
+    "relay": { "mode": "managed" },
+    "consumers": { "profiles": [ "original" ] }
+  },
+  "time": { "enabled": true, "ntpServer": "time.windows.com", "maxClockDifferenceMs": 500 }
+}

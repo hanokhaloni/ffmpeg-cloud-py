@@ -12,6 +12,15 @@ public sealed class BenchConfig
     public TimeCfg Time { get; set; } = new();
     public BenchmarkCfg Benchmark { get; set; } = new();
     public string ReportDirectory { get; set; } = "reports";
+    public LabCfg Lab { get; set; } = new();
+    public UiCfg Ui { get; set; } = new();
+    /// <summary>Named executables for command templates, e.g. "ffmpeg-current", "ffmpeg-7". "ffmpeg-current" defaults to Ffmpeg.Executable.</summary>
+    public Dictionary<string, string> Executables { get; set; } = new();
+
+    public string ResolveExecutable(string reference) =>
+        Executables.TryGetValue(reference, out var p) && !string.IsNullOrWhiteSpace(p) ? p
+        : reference is "ffmpeg-current" or "ffmpeg" ? Ffmpeg.Executable
+        : throw new ArgumentException($"unknown executableReference '{reference}' (define it under \"executables\")");
 
     /// <summary>Later files override earlier ones (e.g. config/site.json + profiles/fragmented-mp4.json).</summary>
     public static BenchConfig Load(IEnumerable<string> paths)

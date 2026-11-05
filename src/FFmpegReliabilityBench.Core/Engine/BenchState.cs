@@ -1,4 +1,5 @@
 using FFmpegReliabilityBench.Core.Config;
+using FFmpegReliabilityBench.Core.Lab;
 using FFmpegReliabilityBench.Core.Diagnostics;
 using FFmpegReliabilityBench.Core.Runner;
 using FFmpegReliabilityBench.Core.Validation;
@@ -25,6 +26,28 @@ public sealed class StreamContext
     public List<(double T, double Cpu, double MemMb)> ProcSeries { get; } = new();
     public bool KilledByFaultInjection { get; set; }
     public double ProducerSeconds { get; set; }
+
+    // ---- lab orchestration (empty for the single-pipeline 'bench' mode)
+    public string SourceId { get; init; } = "";
+    public string SourceKind { get; init; } = "synthetic";
+    public string ProfileId { get; init; } = "";
+    public int InstanceNo { get; init; } = 1;
+    public int Group { get; init; }
+    public string InputUrl { get; set; } = "";
+    public string RunState { get; set; } = "planned"; // planned | starting | running | stopped | blocked | crashed
+    public string? Attribution { get; set; }
+    public string? HlsHttpUrl { get; set; }
+    public BenchConfig? EffectiveConfig { get; set; }
+    public List<(string File, bool Ok, string Detail)> HttpRecordingSamples { get; } = new();
+    public string SegmentListPath { get; set; } = "";
+    /// <summary>When the source's fixture looped (expected timestamp/continuity transitions).</summary>
+    public List<DateTime> LoopBoundariesUtc { get; } = new();
+
+    /// <summary>True when an artifact first seen at <paramref name="t"/> was produced across a fixture loop boundary.</summary>
+    public bool NearLoopBoundary(DateTime t, double windowSeconds)
+    {
+        lock (LoopBoundariesUtc) return LoopBoundariesUtc.Any(b => (t - b).TotalSeconds is var d && d >= -1 && d <= windowSeconds);
+    }
 }
 
 /// <summary>Shared, read-mostly state. The TUI and reporters only read it; the orchestrator owns all lifecycles.</summary>
@@ -53,5 +76,9 @@ public sealed class BenchState
     public volatile bool StopRequested;
     public void RequestStop() => StopRequested = true;
     public IEnumerable<TestResult> AllRuntimeResults => Streams.SelectMany(s => s.Results).Concat(GlobalResults);
+    /// <summary>Lab orchestration state (null in the single-pipeline 'bench' mode).</summary>
+    public LabRuntime? Lab { get; set; }
+    public FFprobeRunner? Probe { get; set; }
+    public double PlannedSeconds { get; set; }
     public TestStatus Overall => FatalError != null ? TestStatus.Fail : Health.Overall(Prerequisites.Concat(AllRuntimeResults));
 }

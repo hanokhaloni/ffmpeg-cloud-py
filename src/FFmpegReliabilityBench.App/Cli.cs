@@ -76,9 +76,27 @@ public static class Cli
     }
 
     public static void PrintHelp() => Console.WriteLine($"""
-        FFmpegReliabilityBench - end-to-end FFmpeg stream & recording reliability tester
+        StreamBench - end-to-end FFmpeg stream & recording reliability tester
 
-        Usage: FFmpegReliabilityBench [mode] [--config file.json [--config profile.json ...]] [overrides] [--no-tui]
+        StreamBench lab [options]          built-in multi-stream lab (default: 4 RTSP publishers × 1 consumer, 10 min)
+        StreamBench run --config cams.json real cameras / external sources (no publishers)
+        StreamBench print-commands [opts]  every publisher/consumer command the lab would launch (redacted), nothing started
+        StreamBench presets                presets and command templates
+        StreamBench bench [options]        single-pipeline benchmark (options below)
+        StreamBench report latest
+
+        lab / run options:
+          --preset NAME (local-4-streams | fan-out-4 | mixed-4x3 | live-synthetic-4 | profile-compare | staged-8 | cameras)
+          --config file.json (repeatable; precedence: defaults < preset < config files < command line)
+          --streams N  --consumers-per-stream K  --duration 00:10:00|600|10m
+          --profiles dual-copy,original,dual-transcode  --execution parallel|sequential|staged-load  --stages 1,2,4  --stagger 500
+          --publisher-mode loop-file|live-synthetic  --fixture 720p25-h264-aac  --source rtsp://camera/path (repeatable)
+          --relay managed|external|none  --relay-exe path\to\mediamtx.exe  --relay-url rtsp://host:8554  --rtsp-port 8554
+          --http-port 8088  --no-http  --run-root DIR  --workers N  --fail-fast
+          --kill-publisher s02@60  --kill-consumer s01-dual-copy@60 (fault injection)
+          --no-tui (headless)  --no-color  --ascii  --refresh-hz 4  --history-seconds 300
+
+        bench usage: StreamBench bench [mode] [--config file.json ...] [overrides] [--no-tui]
 
         Modes:
           --benchmark (default)  preflight + filesystem + network + time + live HLS/recording validation

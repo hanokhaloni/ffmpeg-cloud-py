@@ -32,7 +32,9 @@ public sealed class RecordingRecord
 /// <summary>Tracks every expected recording file through its lifecycle; detects gaps, unfinalized MP4s, locks and unplayable files.</summary>
 public sealed class RecordingMonitor
 {
-    private static readonly Regex NameRx = new(@"^rec_(\d+)\.mp4$", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    private readonly Regex NameRx;
+    private readonly string? _segmentList;
+    private readonly HashSet<string> _listed = new(StringComparer.OrdinalIgnoreCase);
     private readonly string _stream, _dir; private readonly RecordingCfg _cfg; private readonly FFprobeRunner _probe; private readonly EventBus _bus;
     private readonly Stopwatch _clock = Stopwatch.StartNew(), _sinceNew = Stopwatch.StartNew();
     private readonly SemaphoreSlim _gate = new(2);
@@ -44,8 +46,44 @@ public sealed class RecordingMonitor
     public double MaxGapBetweenFilesSeconds { get; private set; }
     public double? TimeToFirstFileSeconds { get; private set; }
 
-    public RecordingMonitor(string stream, string dir, RecordingCfg cfg, FFprobeRunner probe, EventBus bus)
-    { _stream = stream; _dir = dir; _cfg = cfg; _probe = probe; _bus = bus; }
+    /// <summary>Raised after a recording passed every validation stage (used e.g. for sampled HTTP playback).</summary>
+    public event Action<RecordingRecord>? Validated;
+    public int PendingCount => Files.Values.Count(f => f.Status == MediaStatus.Pending);
+    public double SecondsSinceNewFile => _sinceNew.Elapsed.TotalSeconds;
+    public string Directory => _dir;
+
+    /// <param name="fileRegex">Recording file name pattern with one numeric capture group (index).</param>
+    /// <param name="segmentListPath">FFmpeg -segment_list CSV: an entry proves the muxer closed that file.</param>
+    public RecordingMonitor(string stream, string dir, RecordingCfg cfg, FFprobeRunner probe, EventBus bus, string fileRegex = @"^rec_(\d+)\.mp4$", string? segmentListPath = null)
+    {
+        _stream = stream; _dir = dir; _cfg = cfg; _probe = probe; _bus = bus; _segmentList = segmentListPath;
+        NameRx = new Regex(fileRegex, RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    }
+
+    /// <summary>Turns an FFmpeg output pattern such as "rec_%06d.mp4" into a regex with one index group.</summary>
+    public static string PatternToRegex(string fileNamePattern)
+    {
+        var m = System.Text.RegularExpressions.Regex.Match(fileNamePattern, @"%0?\d*d");
+        if (!m.Success) return "^" + System.Text.RegularExpressions.Regex.Escape(fileNamePattern) + "$";
+        return "^" + System.Text.RegularExpressions.Regex.Escape(fileNamePattern[..m.Index]) + @"(\d+)" + System.Text.RegularExpressions.Regex.Escape(fileNamePattern[(m.Index + m.Length)..]) + "$";
+    }
+
+    private void ReadSegmentList()
+    {
+        if (_segmentList == null || !File.Exists(_segmentList)) return;
+        try
+        {
+            using var fs = new FileStream(_segmentList, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            using var r = new StreamReader(fs);
+            string? line;
+            while ((line = r.ReadLine()) != null)
+            {
+                var name = line.Split(',')[0].Trim().Trim('"');
+                if (name.Length > 0) _listed.Add(System.IO.Path.GetFileName(name));
+            }
+        }
+        catch { }
+    }
 
     public void MarkProducerExited() => _producerExited = true;
 
@@ -76,10 +114,11 @@ public sealed class RecordingMonitor
 
     private void Poll()
     {
-        if (!Directory.Exists(_dir)) return;
+        if (!System.IO.Directory.Exists(_dir)) return;
         var now = _clock.Elapsed.TotalSeconds;
         var present = new HashSet<int>();
-        foreach (var path in Directory.EnumerateFiles(_dir, "rec_*.mp4"))
+        ReadSegmentList();
+        foreach (var path in System.IO.Directory.EnumerateFiles(_dir))
         {
             var name = System.IO.Path.GetFileName(path);
             var m = NameRx.Match(name);
@@ -104,13 +143,14 @@ public sealed class RecordingMonitor
 
         // Every expected interval must have a file: index holes are missing recordings.
         for (var i = Math.Min(min, Files.Keys.DefaultIfEmpty(min).Min()); i < max; i++)
-            if (!present.Contains(i) && Files.TryAdd(i, new RecordingRecord { Index = i, FileName = $"rec_{i:D6}.mp4", Status = MediaStatus.Missing, Stage = "EXPECTED", Error = "file never created", Duration = _cfg.SegmentDurationSeconds }))
-                _bus.Publish(EventLevel.Fail, "Recording", _stream, $"recording rec_{i:D6}.mp4 missing (interval gap)");
+            if (!present.Contains(i) && Files.TryAdd(i, new RecordingRecord { Index = i, FileName = $"#{i}", Status = MediaStatus.Missing, Stage = "EXPECTED", Error = "file never created", Duration = _cfg.SegmentDurationSeconds }))
+                _bus.Publish(EventLevel.Fail, "Recording", _stream, $"recording #{i} missing (interval gap)");
 
         foreach (var rec in Files.Values)
         {
             if (rec.Status != MediaStatus.Pending || rec.Validating || !present.Contains(rec.Index)) continue;
-            var closed = rec.Index < max || _producerExited; // segment muxer opens N+1 only after closing N
+            // Closed when FFmpeg listed it in the segment list, a successor exists (segment muxer opens N+1 after closing N), or the producer is gone.
+            var closed = _listed.Contains(rec.FileName) || rec.Index < max || _producerExited;
             if (!closed) continue;
             if (now - rec.LastChangeAt < _cfg.StableSeconds && !_producerExited) continue;
             rec.Stage = "SIZE STABLE";
@@ -156,7 +196,8 @@ public sealed class RecordingMonitor
             if (!p.HasVideo) { Fail(rec, "no video stream"); return; }
             rec.Duration = p.Duration;
             if (p.Duration <= 0.1) { Fail(rec, $"implausible duration {p.Duration:0.000}s"); return; }
-            if (!lastFile && Math.Abs(p.Duration - _cfg.SegmentDurationSeconds) > _cfg.DurationToleranceSeconds)
+            var firstFile = rec.Index == Files.Keys.DefaultIfEmpty(rec.Index).Min();
+            if (!lastFile && !firstFile && Math.Abs(p.Duration - _cfg.SegmentDurationSeconds) > _cfg.DurationToleranceSeconds)
             {
                 rec.DurationAnomaly = true;
                 _bus.Publish(EventLevel.Warn, "Recording", _stream, $"{rec.FileName} duration {p.Duration:0.00}s outside {_cfg.SegmentDurationSeconds}±{_cfg.DurationToleranceSeconds}s");
@@ -176,6 +217,7 @@ public sealed class RecordingMonitor
             }
             rec.Stage = "PLAYBACK VERIFIED";
             rec.Status = MediaStatus.Valid;
+            try { Validated?.Invoke(rec); } catch { }
         }
         catch (FileNotFoundException) { Fail(rec, "file disappeared before validation"); }
         catch (Exception ex) { rec.Status = MediaStatus.Unverified; rec.Error = ex.Message; }

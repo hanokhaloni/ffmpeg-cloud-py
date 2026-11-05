@@ -2,3 +2,11 @@ bin/
 obj/
 reports/
 out/
+streambench-runs/
+streambench-fixtures/
+dist/
+tools/
+ci-out/
+ci-reports/
+lab-run/
+test-results/

@@ -20,6 +20,16 @@ public static class Correlation
                 $"HYPOTHESIS (correlation, not proof): '{s.Message}' is temporally correlated (±{windowSeconds}s) with {string.Join(", ", causes)} events."));
             if (res.Count >= 100) break;
         }
+        // Fixture loop boundaries explain timestamp/continuity transitions: label them instead of blaming a camera.
+        var loops = events.Where(e => e.Category == "Fixture").ToList();
+        foreach (var s in problems.Where(e => Symptoms.Contains(e.Category) || e.Category == "Process"))
+        {
+            var loop = loops.FirstOrDefault(l => Math.Abs(l.T - s.T) <= 2 && (s.Stream == l.Stream || s.Stream.StartsWith(l.Stream + "-", StringComparison.Ordinal)));
+            if (loop == null) continue;
+            res.Add(new Hypothesis(s.TsUtc, s.Stream, s.Message, new List<string> { $"{loop.TsUtc:HH:mm:ss.f} [{loop.Category}/{loop.Stream}] {loop.Message}" },
+                $"EXPLAINED (expected): '{s.Message}' coincides with a fixture loop boundary of source {loop.Stream}; not a camera fault."));
+            if (res.Count >= 150) break;
+        }
         // Cross-stream: the same symptom on several streams at once points to a shared resource (storage, network, CPU) rather than a camera.
         var multi = problems.Where(e => Symptoms.Contains(e.Category) && e.Level == EventLevel.Fail).GroupBy(e => (int)(e.T / windowSeconds)).Where(g => g.Select(e => e.Stream).Distinct().Count() > 1);
         foreach (var g in multi.Take(20))

@@ -5,15 +5,22 @@ on:
   pull_request:
   workflow_dispatch:
 
+env:
+  MEDIAMTX_VERSION: v1.21.3
+
 jobs:
   build-test:
     name: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        include:
+          - os: ubuntu-latest
+            rid: linux-x64
+          - os: windows-latest
+            rid: win-x64
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
 
@@ -34,24 +41,58 @@ jobs:
           $bin = (Get-ChildItem "$env:RUNNER_TEMP\ffmpeg" -Recurse -Filter ffmpeg.exe | Select-Object -First 1).DirectoryName
           $bin | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
-      - name: FFmpeg version
-        run: ffmpeg -hide_banner -version
+      - name: Install MediaMTX into tools/mediamtx
+        shell: pwsh
+        run: |
+          $dir = Join-Path $env:GITHUB_WORKSPACE "tools/mediamtx"
+          New-Item -ItemType Directory -Force -Path $dir | Out-Null
+          if ($IsWindows) {
+            $url = "https://github.com/bluenviron/mediamtx/releases/download/$env:MEDIAMTX_VERSION/mediamtx_$($env:MEDIAMTX_VERSION)_windows_amd64.zip"
+            Invoke-WebRequest $url -OutFile "$env:RUNNER_TEMP\mediamtx.zip"
+            Expand-Archive "$env:RUNNER_TEMP\mediamtx.zip" -DestinationPath $dir -Force
+          } else {
+            $url = "https://github.com/bluenviron/mediamtx/releases/download/$env:MEDIAMTX_VERSION/mediamtx_$($env:MEDIAMTX_VERSION)_linux_amd64.tar.gz"
+            Invoke-WebRequest $url -OutFile "$env:RUNNER_TEMP/mediamtx.tar.gz"
+            tar -xzf "$env:RUNNER_TEMP/mediamtx.tar.gz" -C $dir
+          }
+          $dir | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Tool versions
+        shell: pwsh
+        run: |
+          ffmpeg -hide_banner -version | Select-Object -First 1
+          mediamtx --help | Select-Object -First 1
 
       - name: Build
         run: dotnet build -c Release
 
-      - name: Test
-        run: dotnet test -c Release --no-build --logger "trx;LogFileName=results.trx" --results-directory test-results
+      - name: Test (unit + lab acceptance tests with real FFmpeg and MediaMTX)
+        run: dotnet test -c Release --no-build --logger "trx;LogFileName=results.trx" --logger "console;verbosity=normal" --results-directory test-results
 
-      - name: Smoke benchmark (synthetic source, 45 s)
+      - name: Publish distribution
+        shell: pwsh
+        run: ./scripts/Publish-StreamBench.ps1 -Runtime ${{ matrix.rid }} -Output dist
+
+      - name: Lab via the PowerShell launcher (headless, 2 streams, 60 s)
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path lab-run | Out-Null
+          Push-Location lab-run
+          & ../dist/Start-StreamBenchLab.ps1 -Streams 2 -Duration "00:01:00" -Headless --relay-exe (Join-Path $env:GITHUB_WORKSPACE "tools/mediamtx/$(if ($IsWindows) { 'mediamtx.exe' } else { 'mediamtx' })")
+          $code = $LASTEXITCODE
+          Pop-Location
+          Write-Host "lab exit code: $code (0 PASS, 1 WARN, 2 FAIL, 3 could not run)"
+          # WARN is expected on CI runners (e.g. disk health UNKNOWN); FAIL or could-not-run is not.
+          if ($code -ge 2) { exit 1 }
+
+      - name: Single-pipeline smoke benchmark (45 s)
         shell: bash
         run: |
           set +e
-          dotnet run -c Release --no-build --project src/FFmpegReliabilityBench.App -- \
+          dotnet run -c Release --no-build --project src/FFmpegReliabilityBench.App -- bench \
             --no-tui --duration 45 --hls-dir ci-out/hls --rec-dir ci-out/rec --reports ci-reports
           code=$?
-          echo "benchmark exit code: $code (0 PASS, 1 WARN, 2 FAIL, 3 fatal)"
-          # WARN is expected on CI (e.g. time checks disabled, non-Windows OS on Linux); FAIL/fatal is not.
+          echo "benchmark exit code: $code"
           if [ $code -ge 2 ]; then exit 1; fi
 
       - name: Upload test results and reports
@@ -62,4 +103,6 @@ jobs:
           path: |
             test-results
             ci-reports
+            lab-run/streambench-runs/*/report
+            lab-run/streambench-runs/*/logs
           if-no-files-found: ignore

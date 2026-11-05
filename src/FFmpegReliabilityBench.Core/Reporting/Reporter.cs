@@ -33,7 +33,9 @@ public static class Reporter
         File.WriteAllText(st.ReportHtml, Html(st));
         if (st.Caps != null)
             File.WriteAllText(Path.Combine(dir, "ffmpeg-capabilities.txt"), string.Join("\n\n", st.Caps.RawOutputs.Select(kv => $"===== ffmpeg {kv.Key} =====\n{kv.Value}")));
-        try { File.WriteAllText(Path.Combine(Path.GetDirectoryName(dir)!, "latest.txt"), dir); } catch { }
+        // latest.txt lives next to the session folders (report root for 'bench', run root for 'lab'/'run')
+        var latestRoot = st.Lab != null ? Path.GetDirectoryName(st.Lab.RunDir)! : Path.GetDirectoryName(dir)!;
+        try { File.WriteAllText(Path.Combine(latestRoot, "latest.txt"), dir); } catch { }
     }
 
     public static object BuildModel(BenchState st)
@@ -61,7 +63,8 @@ public static class Reporter
             runtimeResults = st.AllRuntimeResults,
             streams = st.Streams.Select(s => new
             {
-                s.Name, s.HlsDir, s.RecDir, profile = s.Command?.Profile, recordingMode = s.Command?.RecordingMode,
+                s.Name, s.SourceId, s.SourceKind, s.ProfileId, s.InstanceNo, s.RunState, s.Attribution, s.HlsHttpUrl, s.HlsDir, s.RecDir, profile = s.Command?.Profile, recordingMode = s.Command?.RecordingMode,
+                httpRecordingSamples = s.HttpRecordingSamples.Select(x => new { x.File, x.Ok, x.Detail }),
                 command = new { human = s.HumanCommand, argumentList = s.Command?.Args.Select(CommandText.Mask), notes = s.Command?.Notes },
                 process = s.Session == null ? null : new { s.Session.Pid, state = s.Session.State, s.Session.ExitCode, uptimeSeconds = s.Session.Uptime.TotalSeconds, s.Session.StallCount, s.Session.MaxProgressGapSeconds, lastProgress = s.Session.LastProgress, errorCounts = s.Session.ErrorCounts, logFile = s.Session.Job.LogFile },
                 hlsSegments = s.Hls?.Segments.Values.OrderBy(x => x.Sequence),
@@ -69,6 +72,26 @@ public static class Reporter
                 playback = s.Playback == null ? null : new { s.Playback.TimeToFirstFrameSeconds, s.Playback.Frames, s.Playback.MediaSeconds, s.Playback.StallEpisodes, s.Playback.MaxInterruptionSeconds, s.Playback.DecodeErrors, s.Playback.SkippedSegments, s.Playback.Evidence },
                 processSeries = s.ProcSeries.Select(p => new { t = p.T, cpu = p.Cpu, memMb = p.MemMb })
             }),
+            lab = st.Lab == null ? null : new
+            {
+                command = st.Lab.Command, preset = st.Lab.Preset, topology = st.Lab.Topology, topologyDetail = st.Lab.TopologyDetail,
+                strategy = st.Lab.Strategy, schedule = st.Lab.ScheduleText, runDir = st.Lab.RunDir,
+                sourceCompleteness = st.Lab.SourceCompleteness, cameraClock = st.Lab.CameraClock,
+                fixture = st.Lab.Fixture,
+                relay = st.Lab.Relay == null ? null : new { mode = st.Lab.Relay.Mode, st.Lab.Relay.Status, st.Lab.Relay.Version, st.Lab.Relay.BaseUrl, st.Lab.Relay.Pid, st.Lab.Relay.ReadyAfterSeconds, st.Lab.Relay.ConfigPath, st.Lab.Relay.LogPath },
+                http = st.Lab.Http == null ? null : new { st.Lab.Http.BaseUrl, st.Lab.Http.Requests, st.Lab.Http.NotFound, st.Lab.Http.ServerErrors, st.Lab.Http.BytesServed },
+                sources = st.Lab.Sources.Select(x => new
+                {
+                    x.Id, x.Kind, x.Mode, url = CommandText.Mask(x.Url), state = x.State.ToString(), x.StateReason, x.ReadyAfterSeconds, x.ReadinessFrames, x.LoopBoundaries,
+                    x.KilledByFault, x.Dependents, publisherCommand = x.PublisherCommand, publisherArgumentList = x.PublisherArgs.Select(CommandText.Mask), publisherPid = x.Publisher?.Pid
+                }),
+                phases = st.Lab.Phases,
+                startupFailures = st.Lab.StartupFailures,
+                effectiveConfig = st.Lab.EffectiveConfig.Select(v => new { v.Key, value = CommandText.Mask(v.Value), v.Origin }),
+                processesByRole = st.Lab.RoleTotalsThisRun(),
+                processes = Lab.ProcessRegistry.Current.RecentlyExited.Concat(Lab.ProcessRegistry.Current.Live).Where(p => p.StartedUtc >= st.StartedUtc && p.Role != Lab.ProcessRole.Validator)
+                    .Select(p => new { role = p.Role.ToString(), p.Name, p.Owner, p.Pid, p.StartedUtc, p.ExitedUtc, p.ExitCode, cpuSeconds = p.CpuSeconds, command = p.CommandLine })
+            },
             hypotheses = st.Hypotheses,
             events = st.Bus.Snapshot(),
             resources = st.Resources?.Samples
@@ -130,6 +153,23 @@ public static class Reporter
             if (s.Rec != null) sb.Append($"<div class=kpi>{E(s.Name)} recording coverage<b>{s.Rec.Coverage().Percent:F2}%</b></div>");
         }
         sb.Append("</div><p><small>Primary metric: verified media coverage = successfully decoded and accounted-for media ÷ expected media. Statuses are never averaged; UNKNOWN is never PASS.</small></p>");
+
+        if (st.Lab is { } lab)
+        {
+            sb.Append($"<h2>Lab: {E(lab.Topology)}</h2><p><b>{E(lab.TopologyDetail)}</b><br>strategy <b>{E(lab.Strategy)}</b>: {E(lab.ScheduleText)} · preset {E(lab.Preset)} · run directory <code>{E(lab.RunDir)}</code><br>" +
+                $"relay: {E(lab.Relay?.Status)} · HTTP: {E(lab.Http?.BaseUrl ?? "disabled")}<br>source completeness: {E(lab.SourceCompleteness)} · camera clock: {E(lab.CameraClock)}</p>");
+            sb.Append("<table><tr><th>Source</th><th>Kind / mode</th><th>State</th><th>Ready after</th><th>Loops</th><th>Consumers</th><th>Publisher command</th></tr>");
+            foreach (var x in lab.Sources)
+                sb.Append($"<tr><td>{E(x.Id)}</td><td>{E(x.Kind)} / {E(x.Mode)}</td><td>{E(x.State.ToString())} {E(x.StateReason)}</td><td>{(x.ReadyAfterSeconds is double rs ? rs.ToString("F1") + " s" : "-")}</td><td>{x.LoopBoundaries}</td><td>{E(string.Join(", ", x.Dependents))}</td><td><code>{E(x.PublisherCommand)}</code></td></tr>");
+            sb.Append("</table><h3>Startup state machine</h3><table><tr><th>Phase</th><th>Status</th><th>Detail</th></tr>");
+            foreach (var p in lab.Phases)
+                sb.Append($"<tr><td>{E(p.Name)}</td><td>{Badge(p.Status switch { "pass" => TestStatus.Pass, "warn" => TestStatus.Warn, "fail" => TestStatus.Fail, _ => TestStatus.Unknown })} {E(p.Status)}</td><td>{E(p.Detail)}</td></tr>");
+            sb.Append("</table><h3>Load by process role</h3><table><tr><th>Role</th><th>Started</th><th>CPU-seconds</th></tr>");
+            foreach (var t in lab.RoleTotalsThisRun()) sb.Append($"<tr><td>{t.Role}</td><td>{t.Started}</td><td>{t.CpuSeconds:F1}</td></tr>");
+            sb.Append("</table><details><summary>Effective configuration (value and origin)</summary><table><tr><th>Key</th><th>Value</th><th>Origin</th></tr>");
+            foreach (var v in lab.EffectiveConfig) sb.Append($"<tr><td>{E(v.Key)}</td><td>{E(CommandText.Mask(v.Value))}</td><td>{E(v.Origin)}</td></tr>");
+            sb.Append("</table></details>");
+        }
 
         void Table(string title, IEnumerable<TestResult> rs)
         {

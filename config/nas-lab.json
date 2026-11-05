@@ -1,0 +1,10 @@
+{
+  "lab": {
+    "runRoot": "\\\\NAS01\\Video\\streambench-runs",
+    "durationSeconds": 1800,
+    "publishers": { "count": 4 },
+    "consumers": { "instancesPerSource": 1, "profiles": [ "dual-copy" ] }
+  },
+  "storage": { "latencyWarnMs": 500, "latencyFailMs": 2000, "minimumFreeSpaceGb": 50 },
+  "recording": { "stableSeconds": 3 }
+}

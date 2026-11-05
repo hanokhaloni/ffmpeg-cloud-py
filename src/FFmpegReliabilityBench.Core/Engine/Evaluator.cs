@@ -26,8 +26,9 @@ public static class Evaluator
                 : $"state {ses.State}, exit code {ses.ExitCode} after {ses.Uptime.TotalSeconds:F0}s - unexpected termination",
                 new() { ["uptimeSeconds"] = ses.Uptime.TotalSeconds, ["exitCode"] = ses.ExitCode ?? -1 }, ses.RecentProblems.TakeLast(10).Select(l => l.Raw)));
         var lp = ses.LastProgress;
-        r.Add(R("PROC-002", "Process", P("Forward progress watchdog"), lp == null || lp.Frame == 0 ? TestStatus.Fail : ses.StallCount > 0 ? TestStatus.Fail : TestStatus.Pass,
-            lp == null ? "no progress output ever received" : $"{ses.StallCount} stall(s) (>{c.Ffmpeg.ProcessStallTimeoutSeconds}s), max progress gap {ses.MaxProgressGapSeconds:F1}s, time to first frame {ses.TimeToFirstFrameSeconds:F1}s",
+        var noProgress = lp == null || lp.Frame == 0 && lp.OutTimeSeconds <= 0; // stream copy reports frame=0, so media time counts as progress
+        r.Add(R("PROC-002", "Process", P("Forward progress watchdog"), noProgress ? TestStatus.Fail : ses.StallCount > 0 ? TestStatus.Fail : TestStatus.Pass,
+            noProgress ? "no forward progress (frames or media time) ever reported" : $"{ses.StallCount} stall(s) (>{c.Ffmpeg.ProcessStallTimeoutSeconds}s), max progress gap {ses.MaxProgressGapSeconds:F1}s, time to first output {ses.TimeToFirstFrameSeconds:F1}s, media time {lp!.OutTimeSeconds:F1}s",
             new() { ["stalls"] = ses.StallCount, ["maxProgressGapSeconds"] = ses.MaxProgressGapSeconds, ["timeToFirstFrameSeconds"] = ses.TimeToFirstFrameSeconds ?? -1 }));
         var errs = ses.ErrorCounts.Where(kv => kv.Key != FfErrorCategory.ProcessTermination).ToDictionary(kv => kv.Key.ToString(), kv => (double)kv.Value);
         var severe = ses.ErrorCounts.Keys.Any(k => k is FfErrorCategory.DiskFull or FfErrorCategory.PermissionDenied or FfErrorCategory.MuxerError or FfErrorCategory.FileAccessError or FfErrorCategory.EncoderError);
@@ -38,6 +39,7 @@ public static class Evaluator
         {
             var mediaVsWall = ses.Uptime.TotalSeconds > 5 && ses.TimeToFirstFrameSeconds is double ttff ? lp.OutTimeSeconds / Math.Max(1, ses.Uptime.TotalSeconds - ttff) : 1;
             var st = lp.Speed > 0 && lp.Speed < 0.8 || mediaVsWall < 0.8 ? TestStatus.Fail : lp.Speed > 0 && lp.Speed < 0.95 || mediaVsWall < 0.95 || lp.DropFrames > 0 ? TestStatus.Warn : TestStatus.Pass;
+            if (lp.Frame == 0) st = st == TestStatus.Fail ? TestStatus.Fail : lp.Speed > 0 && lp.Speed < 0.95 ? TestStatus.Warn : TestStatus.Pass; // stream copy: no frame counters
             r.Add(R("PROC-004", "Process", P("Real-time processing"), st,
                 $"speed {lp.Speed:F2}x, fps {lp.Fps:F1}, frames {lp.Frame}, media/wall ratio {mediaVsWall:F2}, dropped {lp.DropFrames}, duplicated {lp.DupFrames}",
                 new() { ["speed"] = lp.Speed, ["fps"] = lp.Fps, ["frames"] = lp.Frame, ["mediaWallRatio"] = mediaVsWall, ["dropFrames"] = lp.DropFrames, ["dupFrames"] = lp.DupFrames }));
@@ -68,33 +70,39 @@ public static class Evaluator
             r.Add(R("HLS-004", "HLS", P("Segment validity (probe + full decode)"), invalid.Count > 0 ? TestStatus.Fail : segs.Count(x => x.Status == MediaStatus.Valid) == 0 ? TestStatus.Fail : TestStatus.Pass,
                 $"{segs.Count(x => x.Status == MediaStatus.Valid)} valid, {invalid.Count} invalid, {h.GrowingReferences} referenced while still growing{(c.Hls.DecodeSegments ? "" : " (decode disabled: metadata only)")}",
                 new() { ["valid"] = segs.Count(x => x.Status == MediaStatus.Valid), ["invalid"] = invalid.Count, ["growingReferences"] = h.GrowingReferences }, invalid.Take(20).Select(x => $"#{x.Sequence} {x.Uri}: {x.Error}")));
-            // Exclude the final (possibly short) segment written at shutdown
-            var lastSeq = segs.Count > 0 ? segs[^1].Sequence : -1;
-            var durs = segs.Where(x => x.Status == MediaStatus.Valid && x.Sequence != lastSeq).ToList();
+            // Exclude the first (joined mid-GOP) and the final (cut at shutdown) segments
+            var lastSeq = segs.Count > 0 ? segs[^1].Sequence : -1; var firstSeq = segs.Count > 0 ? segs[0].Sequence : -1;
+            var durs = segs.Where(x => x.Status == MediaStatus.Valid && x.Sequence != lastSeq && x.Sequence != firstSeq).ToList();
             var ds = DurationStats.Of(durs.Select(x => x.PlaylistDuration));
-            var anomalies = durs.Where(x => x.DurationAnomaly).ToList();
+            var allAnomalies = durs.Where(x => x.DurationAnomaly).ToList();
+            // Anomalies produced across a fixture loop boundary are expected transitions (lab), not unexplained faults.
+            var explained = allAnomalies.Where(x => s.NearLoopBoundary(x.FirstSeenUtc, c.Hls.TargetDurationSeconds * 3 + 2)).ToList();
+            var anomalies = allAnomalies.Except(explained).ToList();
             var hardLimit = c.Hls.TargetDurationSeconds + 2 * c.Hls.DurationToleranceSeconds;
             r.Add(R("HLS-005", "HLS", P("Segment duration consistency"), ds.Count == 0 ? TestStatus.Unknown : anomalies.Any(x => x.PlaylistDuration > hardLimit) ? TestStatus.Fail : anomalies.Count > 0 ? TestStatus.Warn : TestStatus.Pass,
-                ds.Count == 0 ? "no validated segments" : $"target {c.Hls.TargetDurationSeconds}s: mean {ds.Mean:F3} min {ds.Min:F3} max {ds.Max:F3} sd {ds.StdDev:F3}; {anomalies.Count} outside ±{c.Hls.DurationToleranceSeconds}s",
-                new() { ["targetSeconds"] = c.Hls.TargetDurationSeconds, ["mean"] = ds.Mean, ["min"] = ds.Min, ["max"] = ds.Max, ["stdDev"] = ds.StdDev, ["anomalies"] = anomalies.Count },
-                anomalies.Take(20).Select(x => $"#{x.Sequence} {x.Uri}: {x.PlaylistDuration:F3}s")));
+                ds.Count == 0 ? "no validated segments" : $"target {c.Hls.TargetDurationSeconds}s: mean {ds.Mean:F3} min {ds.Min:F3} max {ds.Max:F3} sd {ds.StdDev:F3}; {anomalies.Count} unexplained outside ±{c.Hls.DurationToleranceSeconds}s" +
+                    (explained.Count > 0 ? $"; {explained.Count} at fixture loop boundaries (expected)" : ""),
+                new() { ["targetSeconds"] = c.Hls.TargetDurationSeconds, ["mean"] = ds.Mean, ["min"] = ds.Min, ["max"] = ds.Max, ["stdDev"] = ds.StdDev, ["anomalies"] = anomalies.Count, ["explainedByLoop"] = explained.Count },
+                anomalies.Take(20).Select(x => $"#{x.Sequence} {x.Uri}: {x.PlaylistDuration:F3}s").Concat(explained.Take(10).Select(x => $"#{x.Sequence} {x.Uri}: {x.PlaylistDuration:F3}s (fixture loop boundary, expected)"))));
             var wall = s.ProducerSeconds - (h.TimeToFirstPlaylistSeconds ?? 0) + c.Hls.TargetDurationSeconds;
             var cov = h.Coverage(s.KilledByFaultInjection ? null : wall);
             r.Add(Coverage("HLS-006", "HLS", P("HLS verified media coverage"), cov));
-            r.Add(Consumer("HLS-007", P("HLS consumption (independent local consumer)"), s.Playback, c.Hls.PlaybackTest));
+            if (c.Hls.PlaybackTest) r.Add(Consumer("HLS-007", P("HLS consumption (independent local consumer)"), s.Playback, true));
             if (!string.IsNullOrWhiteSpace(c.Hls.HttpUrl))
             {
                 var hc = s.Http; List<double> lat = hc == null ? new() : hc.LatenciesMs.ToList();
-                var bad = hc == null || hc.PlaylistFailures + hc.SegmentFailures + hc.LengthMismatches + hc.DecodeFailures > 0 || hc.SegmentRequests == 0;
-                r.Add(R("HLS-008", "HLS", P("HLS consumption over HTTP"), hc == null ? TestStatus.Unknown : bad ? TestStatus.Fail : hc.MimeWarnings > 0 ? TestStatus.Warn : TestStatus.Pass,
-                    hc == null ? "HTTP consumer never started" : $"{hc.PlaylistRequests} playlist + {hc.SegmentRequests} segment requests; failures {hc.PlaylistFailures}/{hc.SegmentFailures}, length mismatches {hc.LengthMismatches}, decode failures {hc.DecodeFailures}, MIME warnings {hc.MimeWarnings}; latency p95 {Percentile.Of(lat, 95):F0} ms",
-                    new() { ["p95LatencyMs"] = Percentile.Of(lat, 95), ["segmentRequests"] = hc?.SegmentRequests ?? 0 }, hc?.Evidence.Take(20)));
-                r.Add(Consumer("HLS-009", P("HLS playback over HTTP"), s.HttpPlayback, true));
+                var bad = hc == null || hc.PlaylistFailures + hc.SegmentFailures + hc.LengthMismatches + hc.DecodeFailures + hc.HashMismatches > 0 || hc.SegmentRequests == 0;
+                r.Add(R("HLS-008", "HLS", P("HLS delivery over HTTP"), hc == null ? TestStatus.Unknown : bad ? TestStatus.Fail : hc.MimeWarnings > 0 ? TestStatus.Warn : TestStatus.Pass,
+                    hc == null ? "HTTP consumer never started" : $"{hc.PlaylistRequests} playlist + {hc.SegmentRequests} segment requests; failures {hc.PlaylistFailures}/{hc.SegmentFailures}, length mismatches {hc.LengthMismatches}, " +
+                        (hc.HashMatches + hc.HashMismatches > 0 ? $"byte-identical to validated files {hc.HashMatches}/{hc.HashMatches + hc.HashMismatches}, " : $"decode failures {hc.DecodeFailures}, ") +
+                        $"MIME warnings {hc.MimeWarnings}; latency p95 {Percentile.Of(lat, 95):F0} ms",
+                    new() { ["p95LatencyMs"] = Percentile.Of(lat, 95), ["segmentRequests"] = hc?.SegmentRequests ?? 0, ["hashMismatches"] = hc?.HashMismatches ?? 0 }, hc?.Evidence.Take(20)));
+                if (s.HttpPlayback != null || s.SourceId.Length == 0) r.Add(Consumer("HLS-009", P("HLS live playback over HTTP (player)"), s.HttpPlayback, true));
             }
             var gen = Health.Overall(r.Where(x => x.Id is "HLS-001" or "HLS-002" or "HLS-003" or "HLS-004" or "HLS-005" or "HLS-006"));
             var con = Health.Overall(r.Where(x => x.Id is "HLS-007" or "HLS-008" or "HLS-009"));
             r.Insert(r.FindIndex(x => x.Id == "HLS-001"), R("HLS-GEN", "HLS", P("HLS generation (summary)"), gen, "worst of HLS-001..006"));
-            r.Add(R("HLS-CON", "HLS", P("HLS consumption (summary)"), con, "worst of HLS-007..009"));
+            if (r.Any(x => x.Id is "HLS-007" or "HLS-008" or "HLS-009")) r.Add(R("HLS-CON", "HLS", P("HLS consumption (summary)"), con, "worst of HLS-007..009"));
         }
 
         // ---------------- Recording ----------------
@@ -115,11 +123,14 @@ public static class Evaluator
                 $"{files.Count(x => x.Status == MediaStatus.Valid)} valid, {invalid.Count} invalid, {unverified.Count} unverified ({(c.Recording.FullDecode ? "full" : "quick")} decode, mode {s.Command?.RecordingMode})",
                 new() { ["valid"] = files.Count(x => x.Status == MediaStatus.Valid), ["invalid"] = invalid.Count, ["unverified"] = unverified.Count },
                 invalid.Concat(unverified).Take(20).Select(x => $"{x.FileName} [{x.Stage}]: {x.Error}")));
-            var lastIdx = files.Count > 0 ? files[^1].Index : -1;
-            var ds = DurationStats.Of(files.Where(x => x.Status == MediaStatus.Valid && x.Index != lastIdx).Select(x => x.Duration));
-            var anomalies = files.Where(x => x.DurationAnomaly).ToList();
+            var lastIdx = files.Count > 0 ? files[^1].Index : -1; var firstIdx = files.Count > 0 ? files[0].Index : -1;
+            var ds = DurationStats.Of(files.Where(x => x.Status == MediaStatus.Valid && x.Index != lastIdx && x.Index != firstIdx).Select(x => x.Duration));
+            var allRecAnomalies = files.Where(x => x.DurationAnomaly).ToList();
+            var recExplained = allRecAnomalies.Where(x => s.NearLoopBoundary(x.FirstSeenUtc.AddSeconds(segT), segT * 2 + 2)).ToList();
+            var anomalies = allRecAnomalies.Except(recExplained).ToList();
             r.Add(R("REC-004", "Recording", P("Recording duration consistency"), ds.Count == 0 ? TestStatus.Unknown : anomalies.Count > 0 ? TestStatus.Warn : TestStatus.Pass,
-                ds.Count == 0 ? "not enough validated files" : $"target {segT}s: mean {ds.Mean:F3} min {ds.Min:F3} max {ds.Max:F3} sd {ds.StdDev:F3}; {anomalies.Count} outside ±{c.Recording.DurationToleranceSeconds}s",
+                ds.Count == 0 ? "not enough validated files" : $"target {segT}s: mean {ds.Mean:F3} min {ds.Min:F3} max {ds.Max:F3} sd {ds.StdDev:F3}; {anomalies.Count} unexplained outside ±{c.Recording.DurationToleranceSeconds}s" +
+                    (recExplained.Count > 0 ? $"; {recExplained.Count} at fixture loop boundaries (expected)" : ""),
                 new() { ["mean"] = ds.Mean, ["min"] = ds.Min, ["max"] = ds.Max, ["stdDev"] = ds.StdDev, ["anomalies"] = anomalies.Count }, anomalies.Take(20).Select(x => $"{x.FileName}: {x.Duration:F3}s")));
             var seekFail = files.Sum(x => x.SeekFailed); var seekOk = files.Sum(x => x.SeekOk);
             r.Add(R("REC-005", "Recording", P("Playback & seek"), c.Recording.SeekProbes <= 0 ? TestStatus.Unknown : seekFail > 0 ? TestStatus.Fail : seekOk == 0 ? TestStatus.Unknown : TestStatus.Pass,
