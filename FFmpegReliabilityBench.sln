@@ -1,0 +1,43 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.31903.59
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "src", "src", "{ED70C13C-7447-45FE-AF66-359A8FB23328}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "FFmpegReliabilityBench.App", "src\FFmpegReliabilityBench.App\FFmpegReliabilityBench.App.csproj", "{5602A3D5-3CFE-41E2-835C-FD83C8B6AE69}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "FFmpegReliabilityBench.Core", "src\FFmpegReliabilityBench.Core\FFmpegReliabilityBench.Core.csproj", "{A33D1E2E-5873-4B69-AD29-B60A0689A057}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "tests", "tests", "{0BE05C11-8C9A-4CC8-B9FE-C45004AB8B2B}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "FFmpegReliabilityBench.Tests", "tests\FFmpegReliabilityBench.Tests\FFmpegReliabilityBench.Tests.csproj", "{FD52294D-E4ED-4069-8A40-D27981E1B326}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{5602A3D5-3CFE-41E2-835C-FD83C8B6AE69}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{5602A3D5-3CFE-41E2-835C-FD83C8B6AE69}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{5602A3D5-3CFE-41E2-835C-FD83C8B6AE69}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{5602A3D5-3CFE-41E2-835C-FD83C8B6AE69}.Release|Any CPU.Build.0 = Release|Any CPU
+		{A33D1E2E-5873-4B69-AD29-B60A0689A057}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{A33D1E2E-5873-4B69-AD29-B60A0689A057}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{A33D1E2E-5873-4B69-AD29-B60A0689A057}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{A33D1E2E-5873-4B69-AD29-B60A0689A057}.Release|Any CPU.Build.0 = Release|Any CPU
+		{FD52294D-E4ED-4069-8A40-D27981E1B326}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{FD52294D-E4ED-4069-8A40-D27981E1B326}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{FD52294D-E4ED-4069-8A40-D27981E1B326}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{FD52294D-E4ED-4069-8A40-D27981E1B326}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(NestedProjects) = preSolution
+		{5602A3D5-3CFE-41E2-835C-FD83C8B6AE69} = {ED70C13C-7447-45FE-AF66-359A8FB23328}
+		{A33D1E2E-5873-4B69-AD29-B60A0689A057} = {ED70C13C-7447-45FE-AF66-359A8FB23328}
+		{FD52294D-E4ED-4069-8A40-D27981E1B326} = {0BE05C11-8C9A-4CC8-B9FE-C45004AB8B2B}
+	EndGlobalSection
+EndGlobal

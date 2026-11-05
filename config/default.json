@@ -1,0 +1,62 @@
+{
+  "reportDirectory": "reports",
+  "ffmpeg": {
+    "executable": "ffmpeg",
+    "ffprobe": "ffprobe",
+    "logLevel": "info",
+    "processStallTimeoutSeconds": 10,
+    "startupTimeoutSeconds": 30
+  },
+  "source": {
+    "url": "synthetic",
+    "transport": "tcp",
+    "expectedFps": 25,
+    "useReadrate": false
+  },
+  "storage": {
+    "hlsDirectory": "out/hls",
+    "recordingDirectory": "out/rec",
+    "minimumFreeSpaceGb": 10,
+    "smallFileCount": 50,
+    "segmentFileCount": 10,
+    "segmentFileSizeMb": 4,
+    "latencyWarnMs": 250,
+    "latencyFailMs": 1000
+  },
+  "hls": {
+    "enabled": true,
+    "targetDurationSeconds": 2,
+    "playlistSize": 3,
+    "durationToleranceSeconds": 0.5,
+    "maxSegmentAgeSeconds": 8,
+    "minSegmentSizeBytes": 1024,
+    "decodeSegments": true,
+    "flags": "delete_segments+independent_segments",
+    "deleteThreshold": 6,
+    "playlistName": "stream.m3u8",
+    "playbackTest": true,
+    "httpUrl": ""
+  },
+  "recording": {
+    "enabled": true,
+    "segmentDurationSeconds": 5,
+    "mode": "faststart",
+    "fullDecode": true,
+    "stableSeconds": 1.5,
+    "durationToleranceSeconds": 1.5,
+    "seekProbes": 3
+  },
+  "time": {
+    "enabled": false,
+    "ntpServer": "pool.ntp.org",
+    "sampleCount": 5,
+    "maxClockDifferenceMs": 500,
+    "onvifUrl": ""
+  },
+  "benchmark": {
+    "durationSeconds": 3600,
+    "profile": "baseline",
+    "concurrentStreams": 1,
+    "injectKillAtSeconds": 0
+  }
+}

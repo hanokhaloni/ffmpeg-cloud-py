@@ -1,0 +1,8 @@
+{
+  "ffmpeg": { "executable": "C:\\FFmpeg\\bin\\ffmpeg.exe", "ffprobe": "C:\\FFmpeg\\bin\\ffprobe.exe" },
+  "source": { "url": "rtsp://192.168.1.10:554/axis-media/media.amp", "transport": "tcp", "expectedFps": 25 },
+  "storage": { "hlsDirectory": "H:\\hls", "recordingDirectory": "Y:\\recording\\rec", "minimumFreeSpaceGb": 50 },
+  "hls": { "httpUrl": "" },
+  "time": { "enabled": true, "ntpServer": "time.windows.com", "maxClockDifferenceMs": 500, "onvifUrl": "http://192.168.1.10/onvif/device_service" },
+  "benchmark": { "durationSeconds": 3600 }
+}

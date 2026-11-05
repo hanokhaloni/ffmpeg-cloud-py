@@ -1,0 +1,4 @@
+{
+  "benchmark": { "concurrentStreams": 8, "durationSeconds": 28800 },
+  "recording": { "fullDecode": false, "seekProbes": 1 }
+}

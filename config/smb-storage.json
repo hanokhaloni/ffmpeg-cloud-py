@@ -1,0 +1,9 @@
+{
+  "storage": {
+    "hlsDirectory": "\\\\NAS01\\Video\\HLS",
+    "recordingDirectory": "\\\\NAS01\\Video\\Recording",
+    "latencyWarnMs": 500,
+    "latencyFailMs": 2000
+  },
+  "recording": { "stableSeconds": 3 }
+}

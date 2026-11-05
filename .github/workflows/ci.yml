@@ -1,0 +1,65 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build-test:
+    name: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Install FFmpeg (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+
+      - name: Install FFmpeg (Windows, Gyan essentials build)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Invoke-WebRequest https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip -OutFile "$env:RUNNER_TEMP\ffmpeg.zip"
+          Expand-Archive "$env:RUNNER_TEMP\ffmpeg.zip" -DestinationPath "$env:RUNNER_TEMP\ffmpeg"
+          $bin = (Get-ChildItem "$env:RUNNER_TEMP\ffmpeg" -Recurse -Filter ffmpeg.exe | Select-Object -First 1).DirectoryName
+          $bin | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: FFmpeg version
+        run: ffmpeg -hide_banner -version
+
+      - name: Build
+        run: dotnet build -c Release
+
+      - name: Test
+        run: dotnet test -c Release --no-build --logger "trx;LogFileName=results.trx" --results-directory test-results
+
+      - name: Smoke benchmark (synthetic source, 45 s)
+        shell: bash
+        run: |
+          set +e
+          dotnet run -c Release --no-build --project src/FFmpegReliabilityBench.App -- \
+            --no-tui --duration 45 --hls-dir ci-out/hls --rec-dir ci-out/rec --reports ci-reports
+          code=$?
+          echo "benchmark exit code: $code (0 PASS, 1 WARN, 2 FAIL, 3 fatal)"
+          # WARN is expected on CI (e.g. time checks disabled, non-Windows OS on Linux); FAIL/fatal is not.
+          if [ $code -ge 2 ]; then exit 1; fi
+
+      - name: Upload test results and reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: results-${{ matrix.os }}
+          path: |
+            test-results
+            ci-reports
+          if-no-files-found: ignore

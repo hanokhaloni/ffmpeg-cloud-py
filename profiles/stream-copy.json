@@ -1,0 +1,1 @@
+{ "benchmark": { "profile": "copy" }, "recording": { "durationToleranceSeconds": 3 }, "hls": { "durationToleranceSeconds": 1.5 } }
